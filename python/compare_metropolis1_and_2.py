@@ -71,6 +71,7 @@ def read_raw_output(iteration):
             "surplus",
         ],
     )
+    df = df.with_columns(-pl.col("departureMu") / 3600.0)
     df = df.with_columns(pl.arange(1, len(df) + 1).alias("traveler_id"))
     df = df.with_columns(
         pl.col("td") + PERIOD[0],
@@ -158,11 +159,19 @@ def stats():
         common_length, on="traveler_id", suffix="_common", how="left"
     ).with_columns(pl.col("length_common").fill_null(0.0))
     route_rmse = sqrt(((1.0 - length_df["length_common"] / length_df["length"]) ** 2).mean())
+    # Convert mean surplus in METROPOLIS2 format.
+    period_length = PERIOD[1] - PERIOD[0]
+    mean_surplus = mp_users.select(
+        pl.col("surplus")
+        + pl.col("departureMu")
+        * (np.euler_gamma + np.log(period_length) - np.log(period_length / 3600))
+    ).mean()
     print("===== METROPOLIS =====")
     print("RMSE departure time: {:.4}s".format(td_diff_rmse))
     print("RMSE route: {:.2%}".format(route_rmse))
     print("RMSE T: {:.4}s".format(ttime_rmse(NB_ITERATIONS - 1, links)))
     print("RMSE expect: {}".format(seconds_to_time_str(expect)))
+    print("Average surplus: {:.4f}".format(mean_surplus))
     print("Average utility: {:.4f}".format(mp_users["utility"].mean()))
     print("Average departure time: {}".format(seconds_to_time_str(mp_users["td"].mean())))
     print("Average travel time: {}".format(seconds_to_time_str(mp_users["tt"].mean())))
@@ -189,6 +198,7 @@ def stats():
             seconds_to_time_str(it_res["road_leg_exp_travel_time_diff_rmse"][-1])
         )
     )
+    print("Average surplus: {:.4f}".format(it_res["expected_utility_mean"]))
     print("Average utility: {:.4f}".format(it_res["trip_utility_mean"][-1]))
     print(
         "Average departure time: {}".format(
@@ -440,6 +450,7 @@ def compare_convergence_expect(filename=None):
         fig.show()
     else:
         fig.savefig(filename)
+
 
 def compare_convergence_ttime(filename=None):
     zipfile = ZipFile(METROPOLIS1_INPUT)
