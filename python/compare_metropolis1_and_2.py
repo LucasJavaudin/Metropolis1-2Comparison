@@ -166,7 +166,7 @@ def stats():
         + pl.col("departureMu")
         * (np.euler_gamma + np.log(period_length) - np.log(period_length / 3600))
     ).mean()
-    print("===== METROPOLIS =====")
+    print("===== METROPOLIS1 =====")
     print("RMSE departure time: {:.4}s".format(td_diff_rmse))
     print("RMSE route: {:.2%}".format(route_rmse))
     print("RMSE T: {:.4}s".format(ttime_rmse(NB_ITERATIONS - 1, links)))
@@ -228,7 +228,7 @@ def compare_departure_time_distributions(filename=None):
         histtype="step",
         alpha=0.7,
         color=mpl_utils.CMP(0),
-        label="METROPOLIS",
+        label="METROPOLIS1",
     )
     ax.hist(
         (ms_users["departure_time"] / 3600.0),
@@ -265,7 +265,7 @@ def compare_travel_time_distributions(filename=None, tt_max=1.5 * 3600.0):
         histtype="step",
         alpha=0.7,
         color=mpl_utils.CMP(0),
-        label="METROPOLIS",
+        label="METROPOLIS1",
     )
     ax.hist(
         ms_users["total_travel_time"] / 60.0,
@@ -275,13 +275,13 @@ def compare_travel_time_distributions(filename=None, tt_max=1.5 * 3600.0):
         color=mpl_utils.CMP(1),
         label=r"METROPOLIS2",
     )
-    ax.set_xlabel("Travel time")
+    ax.set_xlabel("Travel time (minutes)")
     ax.set_xlim(0.0, tt_max / 60.0)
-    ax.xaxis.set_major_formatter(lambda x, _: seconds_to_time_str(x * 60.0))
-    ax.xaxis.set_major_locator(mticker.MaxNLocator(6))
+    #  ax.xaxis.set_major_formatter(lambda x, _: seconds_to_time_str(x * 60.0))
+    #  ax.xaxis.set_major_locator(mticker.MaxNLocator(6))
     ax.set_ylabel("Count")
     ax.set_ylim(bottom=0)
-    ax.yaxis.set_major_formatter("{x:n}")
+    ax.yaxis.set_major_formatter("{x:,}")
     ax.legend()
     fig.tight_layout()
     if filename is None:
@@ -303,7 +303,7 @@ def compare_travel_time_pairwise_scatter(filename=None, tt_max=1.5 * 3600.0):
         alpha=0.01,
         color=mpl_utils.CMP(0),
     )
-    ax.set_xlabel("Travel time (METROPOLIS)")
+    ax.set_xlabel("Travel time (METROPOLIS1)")
     ax.set_xlim(0.0, tt_max / 60.0)
     ax.xaxis.set_major_formatter(lambda x, _: seconds_to_time_str(x * 60.0))
     ax.xaxis.set_major_locator(mticker.MaxNLocator(6))
@@ -334,7 +334,7 @@ def compare_travel_time_pairwise_hist(filename=None, tt_max=15.0 * 60.0):
         alpha=0.7,
         color=mpl_utils.CMP(0),
     )
-    ax.set_xlabel(r"Travel time (METROPOLIS $-$ METROPOLIS2)")
+    ax.set_xlabel(r"Travel time (METROPOLIS1 $-$ METROPOLIS2)")
     ax.set_xlim(-tt_max / 60.0, tt_max / 60.0)
     ax.xaxis.set_major_formatter(lambda x, _: seconds_to_time_str(x * 60.0))
     ax.xaxis.set_major_locator(mticker.MaxNLocator(6))
@@ -370,7 +370,7 @@ def compare_flows(filename=None, max_flow=6000):
         flows["mp_counts"], flows["ms_counts"], marker=".", alpha=0.5, color=mpl_utils.CMP(0), s=1
     )
     ax.plot([0, max_flow], [0, max_flow], color=mpl_utils.CMP(1), alpha=0.9)
-    ax.set_xlabel("Flows (METROPOLIS)")
+    ax.set_xlabel("Flows (METROPOLIS1)")
     ax.set_xlim(0, max_flow)
     ax.set_ylabel(r"Flows (METROPOLIS2)")
     ax.set_ylim(0, max_flow)
@@ -397,7 +397,7 @@ def compare_convergence_dep_time(filename=None):
         mp_dep_time_rmses,
         alpha=0.7,
         color=mpl_utils.CMP(0),
-        label="METROPOLIS",
+        label="METROPOLIS1",
     )
     ax.plot(
         np.arange(2, NB_ITERATIONS + 1),
@@ -431,7 +431,7 @@ def compare_convergence_expect(filename=None):
         mp_expect_rmses,
         alpha=0.7,
         color=mpl_utils.CMP(0),
-        label="METROPOLIS",
+        label="METROPOLIS1",
     )
     ax.plot(
         np.arange(1, NB_ITERATIONS + 1),
@@ -466,7 +466,7 @@ def compare_convergence_ttime(filename=None):
         mp_ttime_rmses,
         alpha=0.7,
         color=mpl_utils.CMP(0),
-        label="METROPOLIS",
+        label="METROPOLIS1",
     )
     ax.plot(
         np.arange(2, NB_ITERATIONS + 1),
