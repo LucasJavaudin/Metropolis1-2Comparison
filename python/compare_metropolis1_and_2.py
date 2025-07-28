@@ -97,7 +97,7 @@ def read_raw_paths(iteration, links):
     )
     # We need to convert db link ids to user ids.
     db_to_user_id = dict(((db_id, user_id) for db_id, user_id in zip(links["db_id"], links["id"])))
-    df = df.with_columns(pl.col("link_id").map_dict(db_to_user_id))
+    df = df.with_columns(pl.col("link_id").replace(db_to_user_id))
     df = df.with_columns(pl.col("entry_time").str.to_time("%H:%M:%S"))
     df = df.with_columns(
         (
@@ -161,11 +161,15 @@ def stats():
     route_rmse = sqrt(((1.0 - length_df["length_common"] / length_df["length"]) ** 2).mean())
     # Convert mean surplus in METROPOLIS2 format.
     period_length = PERIOD[1] - PERIOD[0]
-    mean_surplus = mp_users.select(
-        pl.col("surplus")
-        + pl.col("departureMu")
-        * (np.euler_gamma + np.log(period_length) - np.log(period_length / 3600))
-    ).mean()
+    mean_surplus = (
+        mp_users.select(
+            pl.col("surplus")
+            + pl.col("departureMu")
+            * (np.euler_gamma + np.log(period_length) - np.log(period_length / 3600))
+        )
+        .mean()
+        .item()
+    )
     print("===== METROPOLIS1 =====")
     print("RMSE departure time: {:.4}s".format(td_diff_rmse))
     print("RMSE route: {:.2%}".format(route_rmse))
@@ -179,42 +183,40 @@ def stats():
     print("Average route length: {:.4f}km".format(mp_users["length"].mean()))
     print("Average nb edges taken: {:.2f}".format(mp_users["count"].mean()))
     it_res = pl.read_parquet(os.path.join(METROPOLIS2_OUTPUT, "iteration_results.parquet"))
-    ms_legs = pl.read_parquet(os.path.join(METROPOLIS2_OUTPUT, "leg_results.parquet"))
-    ms_legs = ms_legs.with_columns(
+    ms_trips = pl.read_parquet(os.path.join(METROPOLIS2_OUTPUT, "trip_results.parquet"))
+    ms_trips = ms_trips.with_columns(
         (pl.col("length_diff") / pl.col("length")).alias("share_length_diff")
     )
-    ms_legs = ms_legs.with_columns(
+    ms_trips = ms_trips.with_columns(
         (
             (pl.col("arrival_time") - pl.col("exp_arrival_time")).abs()
             / (pl.col("arrival_time") - pl.col("departure_time"))
         ).alias("expect")
     )
     print("===== METROPOLIS2 =====")
-    print("RMSE departure time: {:.4}s".format(it_res["trip_dep_time_rmse"][-1]))
-    print("RMSE route: {:.2%}".format(sqrt(ms_legs["share_length_diff"].pow(2).mean())))
-    print("RMSE T: {:.4}s".format(it_res["exp_road_network_weights_rmse"][-1]))
+    print("RMSE departure time: {:.4}s".format(it_res["alt_dep_time_rmse"][-1]))
+    print("RMSE route: {:.2%}".format(sqrt(ms_trips["share_length_diff"].pow(2).mean())))
+    print("RMSE T: {:.4}s".format(it_res["exp_road_network_cond_rmse"][-1]))
     print(
         "RMSE expect: {}".format(
-            seconds_to_time_str(it_res["road_leg_exp_travel_time_diff_rmse"][-1])
+            seconds_to_time_str(it_res["road_trip_exp_travel_time_diff_rmse"][-1])
         )
     )
-    print("Average surplus: {:.4f}".format(it_res["expected_utility_mean"]))
-    print("Average utility: {:.4f}".format(it_res["trip_utility_mean"][-1]))
+    print("Average surplus: {:.4f}".format(it_res["surplus_mean"][-1]))
+    print("Average utility: {:.4f}".format(it_res["alt_utility_mean"][-1]))
     print(
         "Average departure time: {}".format(
-            seconds_to_time_str(it_res["trip_departure_time_mean"][-1])
+            seconds_to_time_str(it_res["alt_departure_time_mean"][-1])
         )
     )
-    print(
-        "Average travel time: {}".format(seconds_to_time_str(it_res["trip_travel_time_mean"][-1]))
-    )
+    print("Average travel time: {}".format(seconds_to_time_str(it_res["alt_travel_time_mean"][-1])))
     print(
         "Average free-flow travel time: {}".format(
-            seconds_to_time_str(it_res["road_leg_route_free_flow_travel_time_mean"][-1])
+            seconds_to_time_str(it_res["road_trip_route_free_flow_travel_time_mean"][-1])
         )
     )
-    print("Average route length: {:.4f}km".format(it_res["road_leg_length_mean"][-1] / 1000.0))
-    print("Average nb edges taken: {:.2f}".format(it_res["road_leg_edge_count_mean"][-1]))
+    print("Average route length: {:.4f}km".format(it_res["road_trip_length_mean"][-1] / 1000.0))
+    print("Average nb edges taken: {:.2f}".format(it_res["road_trip_edge_count_mean"][-1]))
 
 
 def compare_departure_time_distributions(filename=None):
@@ -295,7 +297,7 @@ def compare_travel_time_pairwise_scatter(filename=None, tt_max=1.5 * 3600.0):
     mp_users = mp_users.with_columns((pl.col("ta") - pl.col("td")).alias("tt"))
     mp_users = mp_users.sort("traveler_id")
     ms_users = pl.read_parquet(os.path.join(METROPOLIS2_OUTPUT, "agent_results.parquet"))
-    ms_users = ms_users.sort("id")
+    ms_users = ms_users.sort("agent_id")
     fig, ax = mpl_utils.get_figure(fraction=0.8)
     ax.scatter(
         mp_users["tt"] / 60.0,
@@ -323,7 +325,7 @@ def compare_travel_time_pairwise_hist(filename=None, tt_max=15.0 * 60.0):
     mp_users = mp_users.with_columns((pl.col("ta") - pl.col("td")).alias("tt"))
     mp_users = mp_users.sort("traveler_id")
     ms_users = pl.read_parquet(os.path.join(METROPOLIS2_OUTPUT, "agent_results.parquet"))
-    ms_users = ms_users.sort("id")
+    ms_users = ms_users.sort("agent_id")
     tt_diff = mp_users["tt"] - ms_users["total_travel_time"]
     bins = np.arange(-tt_max / 60.0, tt_max / 60.0, 0.5)
     fig, ax = mpl_utils.get_figure(fraction=0.8)
@@ -365,6 +367,9 @@ def compare_flows(filename=None, max_flow=6000):
         )
         .with_columns(pl.col("mp_counts").fill_null(0), pl.col("ms_counts").fill_null(0))
     )
+    print(
+        "Flow correlation: {:.4f}".format(np.corrcoef(flows["mp_counts"], flows["ms_counts"])[0, 1])
+    )
     fig, ax = mpl_utils.get_figure(fraction=0.8)
     ax.scatter(
         flows["mp_counts"], flows["ms_counts"], marker=".", alpha=0.5, color=mpl_utils.CMP(0), s=1
@@ -401,7 +406,7 @@ def compare_convergence_dep_time(filename=None):
     )
     ax.plot(
         np.arange(2, NB_ITERATIONS + 1),
-        it_res["trip_dep_time_rmse"][1:],
+        it_res["alt_dep_time_rmse"][1:],
         alpha=0.7,
         color=mpl_utils.CMP(1),
         label=r"METROPOLIS2",
@@ -435,7 +440,7 @@ def compare_convergence_expect(filename=None):
     )
     ax.plot(
         np.arange(1, NB_ITERATIONS + 1),
-        it_res["road_leg_exp_travel_time_diff_rmse"],
+        it_res["road_trip_exp_travel_time_diff_rmse"],
         alpha=0.7,
         color=mpl_utils.CMP(1),
         label=r"METROPOLIS2",
@@ -470,7 +475,7 @@ def compare_convergence_ttime(filename=None):
     )
     ax.plot(
         np.arange(2, NB_ITERATIONS + 1),
-        it_res["exp_road_network_weights_rmse"][1:],
+        it_res["exp_road_network_cond_rmse"][1:],
         alpha=0.7,
         color=mpl_utils.CMP(1),
         label=r"METROPOLIS2",
@@ -500,7 +505,7 @@ def read_raw_ttime(iteration, suffix, db_to_user_id):
         new_columns=["link_id"] + list(map(str, range(nb_periods))),
     )
     # We need to convert db link ids to user ids.
-    df = df.with_columns(pl.col("link_id").map_dict(db_to_user_id))
+    df = df.with_columns(pl.col("link_id").replace(db_to_user_id))
     return df
 
 

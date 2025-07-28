@@ -7,15 +7,15 @@ import json
 
 # Path to METROPOLIS1 input zipfile (to be downloaded from METROPOLIS1's web interface, with the
 # `Export` button).
-METROPOLIS1_INPUT = "./metropolis_data/Île-de-France.zip"
+METROPOLIS1_INPUT = "./metropolis_input/Île-de-France.zip"
 # Path to METROPOLIS1 user-level output (to be downloaded from METROPOLIS1's web interface, as the
 # traveler-specific results of a run).
-METROPOLIS1_OUTPUT_USERS = "./metropolis_data/user_results.tsv"
+METROPOLIS1_OUTPUT_USERS = "./metropolis_output/user_results.tsv"
 # Path to METROPOLIS1 path output (only useful when `FORCE_ROUTE` is True, to be downloaded from
 # METROPOLIS1's web interface, as the traveler paths of a run).
-METROPOLIS1_OUTPUT_PATHS = "./metropolis_data/user_paths.tsv"
+METROPOLIS1_OUTPUT_PATHS = "./metropolis_output/user_paths.tsv"
 # Path to METROPOLIS2 input directory where the simulation should be stored.
-METROPOLIS2_RUN_DIR = "./runs/main/"
+METROPOLIS2_RUN_DIR = "./runs/fixed_routes/"
 # If `True`, use the raw METROPOLIS1's user-level output file (the modified METROPOLIS1 version is
 # required for that, not compatible with the web interface).
 RAW_OUTPUT = False
@@ -41,10 +41,10 @@ TT_PENALTIES = False
 FIX_ROUNDING = False
 # If `True`, force the agents' departure time in METROPOLIS2 to be equal to the departure times from
 # METROPOLIS1's output.
-FORCE_DT = False
+FORCE_DT = True
 # If `True`, force the agents' route in METROPOLIS2 to be equal to the routes from METROPOLIS2's
 # output.
-FORCE_ROUTE = False
+FORCE_ROUTE = True
 
 # Time in seconds between two recording points (for the travel-time functions).
 RECORDING_INTERVAL = 20.0 * 60.0
@@ -57,25 +57,27 @@ PERIOD = [4.0 * 3600.0, 13.0 * 3600.0]
 TIMESCALE_SHIFT = 0.0
 # Parameters for METROPOLIS2's simulation.
 PARAMETERS = {
+    "input_files": {
+        "agents": "agents.parquet",
+        "alternatives": "alts.parquet",
+        "trips": "trips.parquet",
+        "edges": "edges.parquet",
+        "vehicle_types": "vehicles.parquet",
+    },
+    "output_directory": "output",
     "period": PERIOD,
     "learning_model": {
         "type": "Linear",
     },
-    "stopping_criteria": [
-        {"type": "MaxIteration", "value": 200},
-    ],
-    "update_ratio": 1.0,
-    "random_seed": SEED,  # The random seed here is not relevant when "update_ratio" = 1.
-    "network": {
-        "road_network": {
-            "recording_interval": RECORDING_INTERVAL,
-            "spillback": SPILLBACK,
-            "max_pending_duration": 30.0,
-            "algorithm_type": "Intersect",
-        }
+    "max_iterations": 1,
+    "road_network": {
+        "recording_interval": RECORDING_INTERVAL,
+        "spillback": SPILLBACK,
+        "max_pending_duration": 30.0,
+        "algorithm_type": "Intersect",
     },
-    "nb_threads": 0,
     "saving_format": "Parquet",
+    "nb_threads": 0,
 }
 
 
@@ -129,10 +131,7 @@ def metropolis_to_metrosim():
         raise Exception("Missing file: links.tsv")
     links = pl.read_csv(link_file.read(), separator="\t")
 
-    sources = links["origin"]
-    targets = links["destination"].map_dict(target_id_map)
-
-    speed_density_schema = {"type": pl.Utf8, "value": pl.Float64}
+    speed_density_schema = {"type": pl.Utf8, "capacity": pl.Float64}
     if FIX_ROUNDING:
         links = links.with_columns(
             (
@@ -152,8 +151,10 @@ def metropolis_to_metrosim():
             .alias("speed")
         )
     links = links.select(
-        pl.col("id").cast(pl.Int64),
-        (pl.col("speed") / 3.6).alias("base_speed"),
+        pl.col("id").cast(pl.Int64).alias("edge_id"),
+        pl.col("origin").alias("source"),
+        pl.col("destination").replace(target_id_map).alias("target"),
+        (pl.col("speed") / 3.6),
         pl.col("length") * 1000,
         pl.col("lanes").cast(pl.Int64),
         pl.when(TRUE_BOTTLENECK)
@@ -164,11 +165,11 @@ def metropolis_to_metrosim():
             )
         )
         .otherwise(
-            pl.when(pl.col("function").map_dict(functions_map) == "bottleneck")
+            pl.when(pl.col("function").replace(functions_map) == "bottleneck")
             .then(
                 pl.struct(
                     pl.lit("Bottleneck").alias("type"),
-                    (pl.col("capacity") * VEHICLE_LENGTH / 3600).alias("value"),
+                    (pl.col("capacity") * VEHICLE_LENGTH / 3600).alias("capacity"),
                     schema=speed_density_schema,
                 )
             )
@@ -195,24 +196,17 @@ def metropolis_to_metrosim():
             (-pl.col("length") / pl.col("base_speed") % 1).alias("constant_travel_time")
         )
 
-    edges = list(zip(sources, targets, links.to_dicts()))
-    graph = {
-        "edges": edges,
-    }
-    vehicles = [
+    vehicles = pl.DataFrame(
         {
-            "length": VEHICLE_LENGTH,
-            "pce": 1.0,
+            "vehicle_id": [1],
+            "headway": [VEHICLE_LENGTH],
+            "pce": [1.0],
         }
-    ]
-    road_network = {
-        "graph": graph,
-        "vehicles": vehicles,
-    }
+    )
 
-    print("Writing JSON file...")
-    with open(os.path.join(METROPOLIS2_RUN_DIR, "road_network.json"), "w") as f:
-        f.write(json.dumps(road_network))
+    print("Writing road network...")
+    links.write_parquet(os.path.join(METROPOLIS2_RUN_DIR, "edges.parquet"))
+    vehicles.write_parquet(os.path.join(METROPOLIS2_RUN_DIR, "vehicles.parquet"))
 
     print("===== Agents =====")
 
@@ -227,16 +221,15 @@ def metropolis_to_metrosim():
         routes_df = pl.read_csv(METROPOLIS1_OUTPUT_PATHS, separator="\t")
         routes_df = routes_df.with_columns(pl.col("in_time").str.to_datetime("%H:%M:%S"))
         routes_df = routes_df.sort("traveler_id", "in_time")
-        routes_dict = routes_df.partition_by("traveler_id", as_dict=True)
+        routes_df = routes_df.group_by("traveler_id").agg(pl.col("link_id").alias("route"))
     else:
-        routes_dict = dict()
+        routes_df = pl.DataFrame()
 
     print("Reading traveler types...")
     classes_file = find_file(zipfile, "traveler_types.tsv")
     if classes_file is None:
         raise Exception("Missing file: traveler_types.tsv")
     classes = pl.read_csv(classes_file.read(), separator="\t")
-    classes = classes.partition_by("name", as_dict=True)
 
     print("Reading agents...")
     agents = list()
@@ -285,90 +278,83 @@ def metropolis_to_metrosim():
             )
         )
         user_results = user_results.with_columns(
-            pl.col("origin").map_dict(db_to_user_id),
-            pl.col("destination").map_dict(db_to_user_id),
+            pl.col("origin").replace(db_to_user_id),
+            pl.col("destination").replace(db_to_user_id),
         )
     else:
         user_results = pl.read_csv(METROPOLIS1_OUTPUT_USERS, separator="\t")
+        user_results = user_results.join(
+            classes.select("name", pl.col("departureMu_mean").alias("departureMu")),
+            left_on="travelerType",
+            right_on="name",
+        )
+        if FORCE_ROUTE:
+            user_results = user_results.join(routes_df, on="traveler_id")
     print("Creating agents...")
     rng = np.random.default_rng(SEED)
-    us = iter(rng.uniform(0, 1, size=len(user_results)))
-    for user in user_results.iter_rows(named=True):
-        t_star_low = PERIOD[0] + TIMESCALE_SHIFT + user["ltstart"]
-        t_star_high = PERIOD[0] + TIMESCALE_SHIFT + user["htstar"]
-        car_leg = {
-            "class": {
-                "type": "Road",
-                "value": {
-                    "origin": user["origin"],
-                    "destination": target_id_map[user["destination"]],
-                    "vehicle": 0,
-                },
-            },
-            "travel_utility": {
-                "type": "Polynomial",
-                "value": {
-                    "b": -float(user["alphaTI"]) / 3600.0,
-                },
-            },
-            "schedule_utility": {
-                "type": "AlphaBetaGamma",
-                "value": {
-                    "t_star_low": t_star_low,
-                    "t_star_high": t_star_high,
-                    "beta": float(user["beta"]) / 3600.0,
-                    "gamma": float(user["gamma"]) / 3600.0,
-                },
-            },
-        }
-        if FORCE_ROUTE and PERIOD[0] + TIMESCALE_SHIFT + user["ta"] <= PERIOD[1]:
-            # Path is not available for users who arrived after the end of the period.
-            car_leg["class"]["value"]["route"] = routes_dict[user["traveler_id"]][
-                "link_id"
-            ].to_list()
-        if FORCE_DT:
-            departure_time_model = {
-                "type": "Constant",
-                "value": PERIOD[0] + TIMESCALE_SHIFT + user["td"],
-            }
+    agents = user_results.select(
+        pl.col("traveler_id").alias("agent_id"),
+    )
+    if FORCE_DT:
+        dt_choice_expr = pl.struct(
+            pl.lit("Constant").alias("type"),
+            (pl.col("td") + PERIOD[0] + TIMESCALE_SHIFT).alias("departure_time"),
+        ).alias("dt_choice")
+    else:
+        if RAW_OUTPUT:
+            us = user_results["epsiDeparture"]
         else:
-            u = user.get("epsiDeparture", next(us))
-            if "departureMu" in user:
-                mu = user["departureMu"]
-            else:
-                mu = classes[user["travelerType"]]["departureMu_mean"].item()
-            departure_time_model = {
-                "type": "ContinuousChoice",
-                "value": {
-                    "period": PERIOD,
-                    "choice_model": {
-                        "type": "Logit",
-                        "value": {
-                            "u": u,
-                            "mu": mu,
-                        },
-                    },
-                },
-            }
-        car = {
-            "type": "Trip",
-            "value": {
-                "legs": [car_leg],
-                "departure_time_model": departure_time_model,
-                "utility_model": {
-                    "Proportional": -float(user["alphaTI"]) / 3600.0,
-                },
-            },
-        }
-        agent = {
-            "id": user["traveler_id"],
-            "modes": [car],
-        }
-        agents.append(agent)
-
-    print("Writing JSON file...")
-    with open(os.path.join(METROPOLIS2_RUN_DIR, "agents.json"), "w") as f:
-        f.write(json.dumps(agents))
+            us = pl.Series(rng.uniform(0, 1, size=len(user_results)))
+        dt_choice_expr = pl.struct(
+            pl.lit("Continuous").alias("type"),
+            pl.struct(
+                pl.lit("Logit").alias("type"),
+                pl.Series(us).alias("u"),
+                pl.col("departureMu").alias("mu"),
+            ).alias("model"),
+        ).alias("dt_choice")
+    if FORCE_ROUTE:
+        class_expr = pl.struct(
+            pl.lit("Road").alias("type"),
+            pl.col("origin"),
+            pl.col("destination").replace(target_id_map),
+            pl.lit(1).alias("vehicle"),
+            pl.col("route"),
+        ).alias("class")
+    else:
+        class_expr = pl.struct(
+            pl.lit("Road").alias("type"),
+            pl.col("origin"),
+            pl.col("destination").replace(target_id_map),
+            pl.lit(1).alias("vehicle"),
+        ).alias("class")
+    alts = user_results.select(
+        pl.col("traveler_id").alias("agent_id"),
+        pl.lit(0).alias("alt_id"),
+        dt_choice_expr,
+    )
+    trips = user_results.select(
+        pl.col("traveler_id").alias("agent_id"),
+        pl.lit(0).alias("alt_id"),
+        pl.col("traveler_id").alias("trip_id"),
+        class_expr,
+        pl.struct(
+            (-pl.col("alphaTI") / 3600.0).alias("one"),
+        ).alias("travel_utility"),
+        pl.struct(
+            pl.lit("AlphaBetaGamma").alias("type"),
+            ((pl.col("ltstart") + pl.col("htstar")) / 2.0 + PERIOD[0] + TIMESCALE_SHIFT).alias(
+                "tstar"
+            ),
+            (pl.col("htstar") - pl.col("ltstart")).alias("delta"),
+            pl.col("beta") / 3600.0,
+            pl.col("gamma") / 3600.0,
+        ).alias("schedule_utility"),
+    )
+    print("Writing population...")
+    agents.write_parquet(os.path.join(METROPOLIS2_RUN_DIR, "agents.parquet"))
+    alts.write_parquet(os.path.join(METROPOLIS2_RUN_DIR, "alts.parquet"))
+    trips.write_parquet(os.path.join(METROPOLIS2_RUN_DIR, "trips.parquet"))
 
     print("===== Parameters =====")
     print("Writing JSON file...")

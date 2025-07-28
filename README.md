@@ -37,6 +37,8 @@ running the simulator.
 METROPOLIS2 can be run from a command line interface with the input files as arguments.
 Version 0.8.0 of METROPOLIS2 was used for the results presented in Javaudin and de Palma (2024).
 
+Current scripts are compatible with METROPOLIS2 version 1.0.0.
+
 ## Python code
 
 The Python packages required to run the code are listed in `requirements.txt`.
